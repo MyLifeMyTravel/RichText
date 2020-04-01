@@ -2,31 +2,25 @@ package com.littlejie.richtext;
 
 import android.content.Context;
 import android.content.res.Resources;
-import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.DashPathEffect;
-import android.graphics.Paint;
-import android.graphics.Path;
 import android.graphics.Typeface;
 import android.text.Spannable;
 import android.text.SpannableString;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
-import android.text.TextPaint;
 import android.text.TextUtils;
 import android.text.method.LinkMovementMethod;
 import android.text.style.AbsoluteSizeSpan;
-import android.text.style.ClickableSpan;
 import android.text.style.ForegroundColorSpan;
-import android.text.style.ReplacementSpan;
 import android.text.style.StyleSpan;
+import android.text.style.UnderlineSpan;
 import android.util.Log;
 import android.util.TypedValue;
 import android.util.Xml;
-import android.view.View;
 import android.widget.TextView;
 
-import androidx.annotation.NonNull;
+import com.littlejie.richtext.span.ClickableSpan;
+import com.littlejie.richtext.span.TypefaceSpan;
 
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
@@ -59,24 +53,13 @@ public class RichTextManager {
     }
 
     public void setSpanText(TextView textView, String text) {
-        setSpanText(textView, text, false, null);
-    }
-
-    public void setSpanText(TextView textView, String text, OnHrefClickListener listener) {
-        setSpanText(textView, text, false, listener);
+        setSpanText(textView, text, null);
     }
 
     public void setSpanText(TextView textView, String text,
-                            boolean withLineSpacingExtra) {
-        setSpanText(textView, text, withLineSpacingExtra, null);
-    }
-
-    public void setSpanText(TextView textView, String text,
-                            boolean withLineSpacingExtra,
                             OnHrefClickListener listener) {
-        textView.setText(getSpannableString(textView.getContext(),
-                text, listener, withLineSpacingExtra));
-        if (text.contains("href")) {
+        textView.setText(getSpannableString(textView.getContext(), text, listener));
+        if (text.contains(RichTextType.HREF.getName())) {
             textView.setMovementMethod(LinkMovementMethod.getInstance());
         }
         //去掉按压高亮
@@ -84,12 +67,11 @@ public class RichTextManager {
     }
 
     public Spannable getSpannableString(Context context, String text) {
-        return getSpannableString(context, text, null, false);
+        return getSpannableString(context, text, null);
     }
 
     public Spannable getSpannableString(Context context, String text,
-                                        OnHrefClickListener listener,
-                                        boolean withLineSpacingExtra) {
+                                        OnHrefClickListener listener) {
         boolean hasOnlyAttr = text.startsWith(START_TAG) && text.endsWith(END_TAG);
         try {
             SpannableStringBuilder builder = new SpannableStringBuilder();
@@ -105,13 +87,11 @@ public class RichTextManager {
                 if (attrStart != 0) {
                     builder.append(getSpanText(context,
                             text.substring(0, attrStart),
-                            listener,
-                            withLineSpacingExtra));
+                            listener));
                 }
                 builder.append(getSpanText(context,
                         text.substring(attrStart, attrEnd + END_TAG.length()),
-                        listener,
-                        withLineSpacingExtra));
+                        listener));
                 text = text.substring(attrEnd + END_TAG.length());
                 attrStart = text.indexOf(START_TAG);
                 attrEnd = text.indexOf(END_TAG);
@@ -135,8 +115,7 @@ public class RichTextManager {
     }
 
     private CharSequence getSpanText(final Context context, String words,
-                                     OnHrefClickListener listener,
-                                     boolean withLineSpacingExtra)
+                                     OnHrefClickListener listener)
             throws IOException, XmlPullParserException {
         if (TextUtils.isEmpty(words)) {
             return "";
@@ -163,10 +142,7 @@ public class RichTextManager {
                 case HREF:
                 case TEXT_COLOR:
                 case TEXT_DECORATION_LINE:
-                case TEXT_DECORATION_STYLE:
-                case TEXT_DECORATION_COLOR:
-                    setTextSpan(context, wordsToSpan, length, listener,
-                            withLineSpacingExtra, spanMap);
+                    setTextSpan(context, wordsToSpan, length, listener, spanMap);
                     break;
                 case FONT_FAMILY:
                     setFontFamilySpan(context, wordsToSpan, length, value);
@@ -214,9 +190,9 @@ public class RichTextManager {
 
     private void setTextSpan(final Context context, Spannable wordsToSpan,
                              int length, OnHrefClickListener listener,
-                             boolean withLineSpacingExtra,
                              Map<String, String> spanMap) {
-        final TextSpanAttr attr = TextSpanAttr.getDefault(context);
+        int textColor = getPrimaryColor(context);
+        boolean hasUnderline = false;
         for (String key : spanMap.keySet()) {
             final String value = spanMap.get(key);
             if (TextUtils.isEmpty(value)) {
@@ -225,19 +201,11 @@ public class RichTextManager {
             RichTextType type = RichTextType.fromName(key);
             switch (type) {
                 case TEXT_COLOR:
-                    attr.textColor = Color.parseColor(value);
+                    textColor = Color.parseColor(value);
                     spanMap.remove(key);
                     break;
                 case TEXT_DECORATION_LINE:
-                    attr.hasUnderline = "underline".equals(value);
-                    spanMap.remove(key);
-                    break;
-                case TEXT_DECORATION_STYLE:
-                    attr.isDashUnderline = "dashed".equals(value);
-                    spanMap.remove(key);
-                    break;
-                case TEXT_DECORATION_COLOR:
-                    attr.underlineColor = Color.parseColor(value);
+                    hasUnderline = Boolean.parseBoolean(value);
                     spanMap.remove(key);
                     break;
                 default:
@@ -245,52 +213,36 @@ public class RichTextManager {
             }
         }
 
+        String url = null;
         //有href标签，即代表有下划线。
-        //若underlineColor=0，则默认取字体颜色
         for (String key : spanMap.keySet()) {
             final String value = spanMap.get(key);
             if (TextUtils.isEmpty(value)) {
                 continue;
             }
             if (RichTextType.HREF.getName().equals(key)) { //超链接
-                attr.value = value;
-                attr.hasUnderline = true;
-                if (attr.underlineColor == 0) {
-                    attr.underlineColor = attr.textColor;
-                }
+                url = value;
+                hasUnderline = true;
                 spanMap.remove(key);
             }
         }
 
-        if (!attr.hasUnderline) { //没有下划线
-            wordsToSpan.setSpan(new ForegroundColorSpan(attr.textColor),
+        if (!TextUtils.isEmpty(url)) {
+            wordsToSpan.setSpan(new ClickableSpan(url, textColor, listener),
                     0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        } else if (!attr.isDashUnderline
-                && attr.textColor == attr.underlineColor) { //下划线颜色==字体颜色
-            wordsToSpan.setSpan(new ForegroundColorSpan(attr.textColor),
+        } else if (hasUnderline) {
+            wordsToSpan.setSpan(new UnderlineSpan(), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        } else {
+            //设置字体颜色
+            wordsToSpan.setSpan(new ForegroundColorSpan(textColor),
                     0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            wordsToSpan.setSpan(new CustomClickableSpan(context, attr, listener),
-                    0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-        } else { //下划线颜色!=字体颜色
-            wordsToSpan.setSpan(new CustomClickableSpan(context, attr, listener),
-                    0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            wordsToSpan.setSpan(new CustomUnderlineSpan(attr.textColor,
-                            attr.underlineColor, attr.isDashUnderline, withLineSpacingExtra),
-                    0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
     }
 
     private void setFontFamilySpan(Context context, Spannable wordsToSpan,
                                    int length, String fontFamily) {
-        //iOS字体加粗DINCondensed-Bold
-        int index = fontFamily.indexOf("-");
-        String name = index == -1 ? fontFamily : fontFamily.substring(0, index);
-        //todo 优化使用注释
-        Typeface typeface = Typeface.createFromAsset(context.getAssets(), "fonts/" + name + ".ttf");
-        if (typeface != null) {
-            wordsToSpan.setSpan(Typeface.DEFAULT,
-                    0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-        }
+        Typeface typeface = Typeface.createFromAsset(context.getAssets(), "fonts/" + fontFamily + ".ttf");
+        wordsToSpan.setSpan(new TypefaceSpan(typeface), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
     }
 
     // 设置字体大小
@@ -363,100 +315,10 @@ public class RichTextManager {
         return map;
     }
 
-    private static class CustomClickableSpan extends ClickableSpan {
-
-        private Context context;
-        private TextSpanAttr attr;
-        private OnHrefClickListener listener;
-
-        CustomClickableSpan(Context context, TextSpanAttr attr, OnHrefClickListener listener) {
-            this.context = context;
-            this.attr = attr;
-            this.listener = listener;
-        }
-
-        @Override
-        public void updateDrawState(@NonNull TextPaint ds) {
-            super.updateDrawState(ds);
-            ds.setColor(attr.underlineColor);
-        }
-
-        @Override
-        public void onClick(@NonNull View widget) {
-            if (listener != null) {
-                listener.onClick(attr.value);
-            }
-        }
-    }
-
-    /**
-     * ReplacementSpan 用于整体替换，当文本长度过长的时候不会自动换行.
-     * 故，使用时该Span的step=1.
-     * 对于下划线为虚线的，目前没有很好的方法解决虚线点间的重叠，故step=length.
-     * 后期有合适方法需要优化.
-     */
-    private static class CustomUnderlineSpan extends ReplacementSpan {
-        private Paint paint;
-        private int textColor;
-        private int textWidth;
-        private float dashInterval = 4;
-        private boolean withLineSpacingExtra;
-
-        CustomUnderlineSpan(int textColor, int color,
-                            boolean isDash, boolean withLineSpacingExtra) {
-            this.textColor = textColor;
-            this.withLineSpacingExtra = withLineSpacingExtra;
-            paint = new Paint();
-            paint.setColor(color);
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setPathEffect(isDash
-                    ? new DashPathEffect(new float[]{dashInterval, dashInterval}, 0)
-                    : null);
-            paint.setStrokeWidth(dpToPx(1f));
-        }
-
-        @Override
-        public int getSize(@NonNull Paint paint, CharSequence text,
-                           int start, int end, Paint.FontMetricsInt fm) {
-            textWidth = (int) paint.measureText(text, start, end);
-            return textWidth;
-        }
-
-        @Override
-        public void draw(@NonNull Canvas canvas, CharSequence text,
-                         int start, int end, float x, int top, int y, int bottom,
-                         @NonNull Paint paint) {
-            if (textColor != 0) {
-                paint.setColor(textColor);
-            }
-            canvas.drawText(text, start, end, x, y, paint);
-            float realBottom = bottom;
-            if (withLineSpacingExtra) { //有行距，下划线位置可能不对，特殊处理
-                Paint.FontMetrics fontMetrics = paint.getFontMetrics();
-                float height = fontMetrics.descent - fontMetrics.ascent;
-                realBottom = top + height;
-            }
-            Path path = new Path();
-            path.moveTo(x, realBottom);
-            path.lineTo(x + textWidth, realBottom);
-            canvas.drawPath(path, this.paint);
-        }
-    }
-
-    private static class TextSpanAttr {
-        private int underlineColor = 0;
-        private int textColor = 0;
-        private boolean isDashUnderline = false;
-        private boolean hasUnderline = false;
-        private String value;
-
-        static TextSpanAttr getDefault(Context context) {
-            TextSpanAttr attr = new TextSpanAttr();
-            TypedValue typedValue = new TypedValue();
-            context.getTheme().resolveAttribute(R.attr.colorPrimary, typedValue, true);
-            attr.textColor = typedValue.data;
-            return attr;
-        }
+    private static int getPrimaryColor(Context context) {
+        TypedValue typedValue = new TypedValue();
+        context.getTheme().resolveAttribute(R.attr.colorPrimary, typedValue, true);
+        return typedValue.data;
     }
 
     private static int dpToPx(float dp) {
